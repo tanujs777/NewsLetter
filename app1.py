@@ -10,24 +10,25 @@ from langchain.chains.combine_documents import create_stuff_documents_chain
 from langchain.chains import create_retrieval_chain
 from dotenv import load_dotenv
 import os
+import json
 
-
+# Load environment variables from .env file
 load_dotenv()
 
 # Set up Google Gemini API key and Hugging Face token
 gemini_api_key = os.getenv("GEMINI_API_KEY")
 os.environ['HF_TOKEN'] = os.getenv("HF_TOKEN", "your-hf-token")
 
-
+# Set up Streamlit page configuration
 st.set_page_config(page_title="Product Page Summarizer")
 st.title("Product Page Summarizer")
 st.subheader("Summarize the key details of a product page")
 
-
+# Sidebar input for Web URL
 with st.sidebar:
     web_url = st.text_input("Enter Product Page URL")
 
-
+# Initialize the Google Gemini LLM
 llm = ChatGoogleGenerativeAI(
     model="gemini-1.5-pro",
     temperature=0.7,
@@ -39,7 +40,7 @@ llm = ChatGoogleGenerativeAI(
 
 embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
 
-
+# Define the system template for summarization
 system_template = (
     "You are a product description summarizer. Your task is to read the product page content "
     "and provide a concise summary that includes the following key details:\n"
@@ -47,39 +48,49 @@ system_template = (
     "2. Key Features\n"
     "3. Price\n"
     "4. Customer Reviews\n\n"
+    "Output the summary as a valid JSON object with the keys: 'Product Name', 'Key Features', 'Price', 'Customer Reviews'."
+    "\n\n"
     "{context}"
 )
 
 # User input for chat query
 chat_query = "Please summarize the product page."
 
-
+# Handle the summarization when the user clicks the "Summarize" button
 if st.button("Summarize"):
     try:
-       
+        # Input validation
         if not web_url:
             st.error("Please provide the Product Page URL to get started.")
         elif not validators.url(web_url):
             st.error("Please enter a valid URL.")
         else:
-            
+            # Load and process the website content
             loader = WebBaseLoader(web_path=[web_url])
             docs = loader.load()
             text_splitter = RecursiveCharacterTextSplitter(separators="\n", chunk_size=1000, chunk_overlap=200)
             final_docs = text_splitter.split_documents(docs)
             
-           
+            # Create a FAISS vector store from the documents
             vector_store_db = FAISS.from_documents(final_docs, embeddings)
             retriever = vector_store_db.as_retriever()
             
-            
+            # Create a prompt and the summarization chain
             prompt = PromptTemplate(input_variables=["context"], template=system_template)
             summary_chain = create_stuff_documents_chain(llm, prompt)
             rag_chain = create_retrieval_chain(retriever, summary_chain)
             
-            
+            # Get the summary from the chain
             response = rag_chain.invoke({"input": chat_query})
-            st.success("Summary Generated:")
-            st.json(response["answer"])
+
+            # Attempt to parse the response as JSON
+            try:
+                summary_json = json.loads(response["answer"])
+                st.success("Summary Generated:")
+                st.json(summary_json)
+            except json.JSONDecodeError:
+                st.error("The model output is not valid JSON. Displaying raw output:")
+                st.text(response["answer"])
+
     except Exception as e:
         st.exception(f'Exception: {e}')
